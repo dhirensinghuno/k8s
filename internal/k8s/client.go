@@ -46,6 +46,8 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("failed to build config: %w", err)
 	}
 
+	config.Timeout = 30 * time.Second
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)

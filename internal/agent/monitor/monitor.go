@@ -46,7 +46,9 @@ func NewMonitor(client *k8s.Client, cfg MonitorConfig) *Monitor {
 }
 
 func (m *Monitor) Start(ctx context.Context) {
-	m.refreshAll(ctx)
+	refreshCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	m.refreshAll(refreshCtx)
 	go m.runMonitorLoop(ctx)
 }
 
@@ -116,16 +118,14 @@ func (m *Monitor) refreshAll(ctx context.Context) {
 	}()
 
 	wg.Wait()
+	health := m.calculateHealthUnsafe()
 	m.mu.Lock()
-	m.health = m.calculateHealth()
+	m.health = health
 	m.mu.Unlock()
 	m.detectIssues(ctx)
 }
 
-func (m *Monitor) calculateHealth() *models.ClusterHealth {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+func (m *Monitor) calculateHealthUnsafe() *models.ClusterHealth {
 	health := &models.ClusterHealth{
 		Timestamp: time.Now(),
 	}
@@ -174,6 +174,12 @@ func (m *Monitor) calculateHealth() *models.ClusterHealth {
 	}
 
 	return health
+}
+
+func (m *Monitor) calculateHealth() *models.ClusterHealth {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.calculateHealthUnsafe()
 }
 
 func (m *Monitor) detectIssues(ctx context.Context) {
