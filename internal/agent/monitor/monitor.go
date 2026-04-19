@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -30,9 +31,12 @@ type MonitorConfig struct {
 }
 
 func NewMonitor(client *k8s.Client, cfg MonitorConfig) *Monitor {
+	log.Printf("[Monitor] Creating new monitor instance with PollInterval=%v\n", cfg.PollInterval)
 	if cfg.PollInterval == 0 {
+		log.Println("[Monitor] PollInterval not set, using default 10s")
 		cfg.PollInterval = 10 * time.Second
 	}
+	log.Printf("[Monitor] Monitor created with PollInterval=%v\n", cfg.PollInterval)
 	return &Monitor{
 		client:       client,
 		pollInterval: cfg.PollInterval,
@@ -46,17 +50,24 @@ func NewMonitor(client *k8s.Client, cfg MonitorConfig) *Monitor {
 }
 
 func (m *Monitor) Start(ctx context.Context) {
+	log.Println("[Monitor] Starting monitor...")
 	refreshCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	log.Println("[Monitor] Running initial refresh...")
 	m.refreshAll(refreshCtx)
+	log.Println("[Monitor] Initial refresh complete, starting monitor loop")
 	go m.runMonitorLoop(ctx)
+	log.Println("[Monitor] Monitor started successfully")
 }
 
 func (m *Monitor) Stop() {
+	log.Println("[Monitor] Stopping monitor...")
 	close(m.stopCh)
+	log.Println("[Monitor] Monitor stopped")
 }
 
 func (m *Monitor) runMonitorLoop(ctx context.Context) {
+	log.Printf("[Monitor] Monitor loop started, polling every %v\n", m.pollInterval)
 	ticker := time.NewTicker(m.pollInterval)
 	defer ticker.Stop()
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -50,7 +51,9 @@ func DefaultConfig() *Config {
 }
 
 func NewAgent(client *k8s.Client, store *store.Store, cfg *Config) *Agent {
+	log.Println("[Agent] Creating new agent instance...")
 	if cfg == nil {
+		log.Println("[Agent] No config provided, using defaults")
 		cfg = DefaultConfig()
 	}
 
@@ -61,6 +64,9 @@ func NewAgent(client *k8s.Client, store *store.Store, cfg *Config) *Agent {
 		EnableAutoRollback:    cfg.EnableAutoRollback,
 		MemoryIncreasePercent: cfg.MemoryIncreasePercent,
 	}
+
+	log.Printf("[Agent] Config: PollInterval=%v, AutoRemediation=%v, AutoRollback=%v\n",
+		cfg.PollInterval, cfg.EnableAutoRemediation, cfg.EnableAutoRollback)
 
 	a := &Agent{
 		client:       client,
@@ -76,30 +82,38 @@ func NewAgent(client *k8s.Client, store *store.Store, cfg *Config) *Agent {
 		cancel:       cancel,
 	}
 
+	log.Println("[Agent] Creating monitor with config...")
 	a.monitor = monitor.NewMonitor(client, monitor.MonitorConfig{
 		PollInterval: cfg.PollInterval,
 		OnIssue:      a.handleIssue,
 		OnEvent:      a.handleEvent,
 	})
 
+	log.Println("[Agent] Agent instance created successfully")
 	return a
 }
 
 func (a *Agent) Start() error {
+	log.Println("[Agent] Starting agent...")
 	a.monitor.Start(a.ctx)
+	log.Println("[Agent] Monitor started")
 
 	if a.store != nil {
+		log.Println("[Agent] Starting store loop...")
 		go a.storeLoop()
 	}
 
 	a.log("info", "Agent", "Kubernetes SRE Agent started")
+	log.Println("[Agent] Agent started successfully")
 	return nil
 }
 
 func (a *Agent) Stop() {
+	log.Println("[Agent] Stopping agent...")
 	a.cancel()
 	a.monitor.Stop()
 	a.log("info", "Agent", "Kubernetes SRE Agent stopped")
+	log.Println("[Agent] Agent stopped")
 }
 
 func (a *Agent) handleIssue(issue models.Issue) {

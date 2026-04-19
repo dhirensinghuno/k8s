@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -27,11 +29,35 @@ type Client struct {
 	cloudProvider string
 }
 
+type ClientOptions struct {
+	KubeconfigPath string
+	AWSProfile     string
+	AWSRegion      string
+	EKSClusterName string
+}
+
 func NewClient() (*Client, error) {
+	log.Println("[K8sClient] Creating new client with default options...")
+	return NewClientWithOptions(ClientOptions{})
+}
+
+func NewClientWithOptions(opts ClientOptions) (*Client, error) {
+	log.Println("[K8sClient] Creating client with options...")
 	var config *rest.Config
 	var err error
 
+	if opts.EKSClusterName != "" || opts.AWSProfile != "" || opts.AWSRegion != "" {
+		log.Printf("[K8sClient] EKS options detected, cluster=%s region=%s profile=%s\n",
+			opts.EKSClusterName, opts.AWSRegion, opts.AWSProfile)
+		return NewEKSClient(opts)
+	}
+
 	kubeconfig := os.Getenv("KUBECONFIG")
+	if opts.KubeconfigPath != "" {
+		kubeconfig = opts.KubeconfigPath
+		log.Printf("[K8sClient] Using kubeconfig from flag: %s", kubeconfig)
+	}
+
 	homeDir, _ := os.UserHomeDir()
 
 	if kubeconfig != "" {
@@ -43,25 +69,92 @@ func NewClient() (*Client, error) {
 	}
 
 	if err != nil {
+		log.Printf("[K8sClient] Failed to build config: %v", err)
 		return nil, fmt.Errorf("failed to build config: %w", err)
 	}
 
 	config.Timeout = 30 * time.Second
+	log.Printf("[K8sClient] Config built successfully, API server: %s", config.Host)
 
+	log.Println("[K8sClient] Creating Kubernetes clientset...")
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
+		log.Printf("[K8sClient] Failed to create clientset: %v", err)
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
+	log.Println("[K8sClient] Clientset created successfully")
 
 	provider := "standard"
 	if config.Host != "" {
 		provider = detectCloudProvider(config.Host)
 	}
+	log.Printf("[K8sClient] Detected cloud provider: %s", provider)
 
+	log.Printf("[K8sClient] Client created successfully (provider=%s)", provider)
 	return &Client{
 		clientset:     clientset,
 		restConfig:    config,
 		cloudProvider: provider,
+	}, nil
+}
+
+func NewEKSClient(opts ClientOptions) (*Client, error) {
+	log.Println("[K8sClient] Creating EKS client...")
+	if opts.EKSClusterName == "" {
+		return nil, fmt.Errorf("EKS cluster name is required when using AWS EKS")
+	}
+
+	region := opts.AWSRegion
+	if region == "" {
+		region = os.Getenv("AWS_REGION")
+		if region == "" {
+			region = "us-east-1"
+		}
+	}
+
+	log.Printf("[K8sClient] Connecting to EKS cluster: %s in region: %s", opts.EKSClusterName, region)
+
+	var cmd *exec.Cmd
+	if opts.AWSProfile != "" {
+		log.Printf("[K8sClient] Using AWS profile: %s", opts.AWSProfile)
+		cmd = exec.Command("aws", "eks", "update-kubeconfig", "--name", opts.EKSClusterName, "--region", region, "--profile", opts.AWSProfile)
+	} else {
+		cmd = exec.Command("aws", "eks", "update-kubeconfig", "--name", opts.EKSClusterName, "--region", region)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("[K8sClient] Warning: Failed to update kubeconfig via AWS CLI: %v", err)
+	}
+
+	kubeconfigPath := os.Getenv("KUBECONFIG")
+	if kubeconfigPath == "" {
+		homeDir, _ := os.UserHomeDir()
+		kubeconfigPath = homeDir + "/.kube/config"
+	}
+	log.Printf("[K8sClient] Using kubeconfig: %s", kubeconfigPath)
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		log.Printf("[K8sClient] Failed to build config from kubeconfig: %v", err)
+		return nil, fmt.Errorf("failed to build config from kubeconfig: %w", err)
+	}
+
+	config.Timeout = 30 * time.Second
+
+	log.Println("[K8sClient] Creating EKS clientset...")
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Printf("[K8sClient] Failed to create EKS clientset: %v", err)
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
+	}
+	log.Println("[K8sClient] EKS clientset created successfully")
+
+	log.Printf("[K8sClient] EKS client created successfully (cluster=%s)", opts.EKSClusterName)
+	return &Client{
+		clientset:     clientset,
+		restConfig:    config,
+		cloudProvider: "eks",
 	}, nil
 }
 

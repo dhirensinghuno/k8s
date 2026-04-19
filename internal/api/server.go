@@ -34,12 +34,14 @@ type Server struct {
 }
 
 func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
+	log.Printf("[API] Creating API server on port %d...\n", port)
 	s := &Server{
 		agent:   agent,
 		client:  client,
 		wsConns: make(map[*websocket.Conn]bool),
 	}
 
+	log.Println("[API] Creating router...")
 	s.router = mux.NewRouter()
 
 	s.router.Use(func(next http.Handler) http.Handler {
@@ -55,8 +57,10 @@ func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
 		})
 	})
 
+	log.Println("[API] Setting up routes...")
 	s.setupRoutes()
 
+	log.Printf("[API] Configuring HTTP server on :%d...", port)
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      s.router,
@@ -64,6 +68,7 @@ func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	log.Println("[API] Server created successfully")
 	return s
 }
 
@@ -96,23 +101,30 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) Start() error {
+	log.Println("[API] Starting server...")
 	go s.broadcastLoop()
+	log.Println("[API] Broadcast loop started")
+	log.Printf("[API] Server listening on %s", s.server.Addr)
 	return s.server.ListenAndServe()
 }
 
 func (s *Server) Stop() error {
+	log.Println("[API] Stopping server...")
 	s.wsMu.Lock()
 	for conn := range s.wsConns {
 		conn.Close()
 	}
 	s.wsMu.Unlock()
 
+	log.Println("[API] Server stopped")
 	return s.server.Shutdown(context.Background())
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	log.Println("[API] Handling /api/health request...")
 	health := s.agent.GetHealth()
 	if health == nil {
+		log.Println("[API] No health data available")
 		health = &models.ClusterHealth{
 			Timestamp:      time.Now(),
 			OverallStatus:  "unknown",
@@ -125,6 +137,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			WarningIssues:  0,
 			RecentActions:  0,
 		}
+	} else {
+		log.Printf("[API] Health status: %s, Nodes: %d/%d, Pods: %d/%d",
+			health.OverallStatus, health.NodesReady, health.NodesTotal, health.PodsRunning, health.PodsTotal)
 	}
 
 	s.writeJSON(w, health)

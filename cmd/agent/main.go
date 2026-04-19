@@ -14,13 +14,17 @@ import (
 )
 
 var (
-	port       int
-	dbHost     string
-	dbPort     int
-	dbUser     string
-	dbPassword string
-	dbName     string
-	enableDB   bool
+	port           int
+	dbHost         string
+	dbPort         int
+	dbUser         string
+	dbPassword     string
+	dbName         string
+	enableDB       bool
+	awsProfile     string
+	awsRegion      string
+	eksClusterName string
+	kubeconfigPath string
 )
 
 func main() {
@@ -31,11 +35,22 @@ func main() {
 	flag.StringVar(&dbPassword, "db-password", "", "PostgreSQL password")
 	flag.StringVar(&dbName, "db-name", "k8s_sre", "PostgreSQL database name")
 	flag.BoolVar(&enableDB, "enable-db", false, "Enable PostgreSQL storage")
+	flag.StringVar(&awsProfile, "aws-profile", "", "AWS profile for EKS")
+	flag.StringVar(&awsRegion, "aws-region", "", "AWS region for EKS (e.g., us-east-1)")
+	flag.StringVar(&eksClusterName, "eks-cluster", "", "EKS cluster name")
+	flag.StringVar(&kubeconfigPath, "kubeconfig", "", "Path to kubeconfig file")
 	flag.Parse()
 
 	log.Println("Starting Kubernetes SRE Agent...")
 
-	client, err := k8s.NewClient()
+	clientOpts := k8s.ClientOptions{
+		KubeconfigPath: kubeconfigPath,
+		AWSProfile:     awsProfile,
+		AWSRegion:      awsRegion,
+		EKSClusterName: eksClusterName,
+	}
+
+	client, err := k8s.NewClientWithOptions(clientOpts)
 	if err != nil {
 		log.Fatalf("Failed to create Kubernetes client: %v", err)
 	}
