@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-const API_BASE = 'http://localhost:8888';
+const API_BASE = '';
 
 interface Pod {
   name: string;

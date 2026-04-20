@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { GitBranch, RotateCcw, RefreshCw } from 'lucide-react';
-const API_BASE = 'http://localhost:8888';
+const API_BASE = '';
 
 interface Deployment {
   name: string;
@@ -36,26 +36,75 @@ export default function Deployments() {
 
   const handleRollback = async (namespace: string, name: string) => {
     try {
-      await fetch(`${API_BASE}/api/deployments/${namespace}/${name}/rollback`, {
+      const url = `${API_BASE}/api/deployments/${namespace}/${name}/rollback`;
+      console.log('[Deployments] Rollback URL:', url);
+      console.log('[Deployments] API_BASE:', API_BASE);
+      
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Manual rollback via dashboard' })
       });
+      
+      console.log('[Deployments] Rollback response status:', res.status);
+      console.log('[Deployments] Rollback response ok:', res.ok);
+      const text = await res.text();
+      console.log('[Deployments] Rollback response text:', text);
+      
+      if (!res.ok) {
+        alert(`Rollback failed: HTTP ${res.status} - ${text}`);
+        return;
+      }
+      
+      let data;
+      try {
+        data = JSON.parse(text);
+        alert(`Rollback successful: ${data.message || text}`);
+      } catch {
+        alert(`Rollback successful: ${text}`);
+      }
       setRollbackConfirm(null);
       fetchDeployments();
     } catch (err) {
       console.error('Rollback failed:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Rollback failed: ${errMsg}`);
     }
   };
 
   const handleRestart = async (namespace: string, name: string) => {
     try {
-      await fetch(`${API_BASE}/api/deployments/${namespace}/${name}/restart`, {
-        method: 'POST'
+      const url = `${API_BASE}/api/deployments/${namespace}/${name}/restart`;
+      console.log('[Deployments] Restart URL:', url);
+      console.log('[Deployments] API_BASE:', API_BASE);
+      
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
       });
+      
+      console.log('[Deployments] Restart response status:', res.status);
+      console.log('[Deployments] Restart response ok:', res.ok);
+      const text = await res.text();
+      console.log('[Deployments] Restart response text:', text);
+      
+      if (!res.ok) {
+        alert(`Restart failed: HTTP ${res.status} - ${text}`);
+        return;
+      }
+      
+      let data;
+      try {
+        data = JSON.parse(text);
+        alert(`Restart successful: ${data.message || text}`);
+      } catch {
+        alert(`Restart successful: ${text}`);
+      }
       fetchDeployments();
     } catch (err) {
       console.error('Restart failed:', err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Restart failed: ${errMsg}`);
     }
   };
 

@@ -7,15 +7,15 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:8888',
+        target: 'http://127.0.0.1:8888',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8888',
+        target: 'ws://127.0.0.1:8888',
         ws: true,
       },
       '/health': {
-        target: 'http://localhost:8888',
+        target: 'http://127.0.0.1:8888',
         changeOrigin: true,
       },
     },

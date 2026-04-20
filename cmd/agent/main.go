@@ -9,6 +9,7 @@ import (
 
 	"github.com/k8s-sre/agent/internal/agent"
 	"github.com/k8s-sre/agent/internal/api"
+	"github.com/k8s-sre/agent/internal/auth"
 	"github.com/k8s-sre/agent/internal/k8s"
 	"github.com/k8s-sre/agent/internal/store"
 )
@@ -25,6 +26,9 @@ var (
 	awsRegion      string
 	eksClusterName string
 	kubeconfigPath string
+	authEnabled    bool
+	authJWTSecret  string
+	adminPassword  string
 )
 
 func main() {
@@ -39,6 +43,9 @@ func main() {
 	flag.StringVar(&awsRegion, "aws-region", "", "AWS region for EKS (e.g., us-east-1)")
 	flag.StringVar(&eksClusterName, "eks-cluster", "", "EKS cluster name")
 	flag.StringVar(&kubeconfigPath, "kubeconfig", "", "Path to kubeconfig file")
+	flag.BoolVar(&authEnabled, "auth-enabled", false, "Enable authentication")
+	flag.StringVar(&authJWTSecret, "auth-jwt-secret", "change-me-in-production", "JWT signing secret")
+	flag.StringVar(&adminPassword, "auth-admin-password", "admin1234", "Default admin password (min 8 chars)")
 	flag.Parse()
 
 	log.Println("Starting Kubernetes SRE Agent...")
@@ -66,6 +73,18 @@ func main() {
 		} else {
 			log.Println("Connected to PostgreSQL database")
 		}
+
+		if authEnabled && db != nil {
+			log.Println("Initializing auth tables...")
+			if err := db.InitAuthTables(); err != nil {
+				log.Printf("Warning: Failed to initialize auth tables: %v", err)
+			}
+
+			log.Printf("Creating default admin user...")
+			if err := db.CreateDefaultAdmin(adminPassword); err != nil {
+				log.Printf("Warning: Failed to create admin user: %v", err)
+			}
+		}
 	}
 
 	cfg := agent.DefaultConfig()
@@ -77,6 +96,13 @@ func main() {
 	log.Println("SRE Agent started successfully")
 
 	server := api.NewServer(sreAgent, client, port)
+
+	if authEnabled && db != nil {
+		log.Println("Setting up authentication...")
+		authMiddleware := auth.NewAuthMiddleware(authJWTSecret, db, true)
+		server.SetAuthMiddleware(authMiddleware)
+		log.Printf("Authentication enabled (token valid for 12 hours)")
+	}
 	go func() {
 		log.Printf("Starting HTTP server on port %d", port)
 		if err := server.Start(); err != nil {

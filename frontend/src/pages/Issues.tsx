@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
-const API_BASE = 'http://localhost:8888';
+const API_BASE = '';
 
 interface Issue {
   id: string;
@@ -14,8 +14,9 @@ interface Issue {
   reason: string;
   message: string;
   root_cause: string;
-  evidence: string[];
+  evidence: string[] | null;
   resolved: boolean;
+  resolved_at: string | null;
 }
 
 export default function Issues() {
@@ -81,41 +82,49 @@ export default function Issues() {
             </tr>
           </thead>
           <tbody>
-            {issues.map(issue => (
-              <tr key={issue.id}>
-                <td>
-                  <span className={`issue-tag ${getSeverityClass(issue.severity)}`}>
-                    {issue.severity}
-                  </span>
-                </td>
-                <td>{issue.type}</td>
-                <td>{issue.namespace}</td>
-                <td>{issue.pod}</td>
-                <td>{issue.reason}</td>
-                <td>{formatTime(issue.timestamp)}</td>
-                <td style={{ color: issue.resolved ? '#22c55e' : '#f59e0b' }}>
-                  {issue.resolved ? 'Resolved' : 'Active'}
-                </td>
-                <td>
-                  <button 
-                    className="btn btn-secondary" 
-                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                    onClick={() => setSelectedIssue(issue)}
-                  >
-                    Details
-                  </button>
-                  {!issue.resolved && (
-                    <button 
-                      className="btn btn-primary" 
-                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', marginLeft: '0.5rem' }}
-                      onClick={() => resolveIssue(issue.id)}
-                    >
-                      <CheckCircle size={14} /> Resolve
-                    </button>
-                  )}
+            {issues.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ textAlign: 'center', color: '#64748b' }}>
+                  No issues detected
                 </td>
               </tr>
-            ))}
+            ) : (
+              issues.map(issue => (
+                <tr key={issue.id}>
+                  <td>
+                    <span className={`issue-tag ${getSeverityClass(issue.severity)}`}>
+                      {issue.severity}
+                    </span>
+                  </td>
+                  <td>{issue.type}</td>
+                  <td>{issue.namespace}</td>
+                  <td>{issue.pod}</td>
+                  <td>{issue.reason || '-'}</td>
+                  <td>{formatTime(issue.timestamp)}</td>
+                  <td style={{ color: issue.resolved ? '#22c55e' : '#f59e0b' }}>
+                    {issue.resolved ? 'Resolved' : 'Active'}
+                  </td>
+                  <td>
+                    <button 
+                      className="btn btn-secondary" 
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                      onClick={() => setSelectedIssue(issue)}
+                    >
+                      Details
+                    </button>
+                    {!issue.resolved && (
+                      <button 
+                        className="btn btn-primary" 
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', marginLeft: '0.5rem' }}
+                        onClick={() => resolveIssue(issue.id)}
+                      >
+                        <CheckCircle size={14} /> Resolve
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -125,23 +134,60 @@ export default function Issues() {
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 600 }}>
             <h3>Issue Details</h3>
             <div style={{ marginTop: '1rem' }}>
-              <p><strong>Type:</strong> {selectedIssue.type}</p>
-              <p><strong>Severity:</strong> {selectedIssue.severity}</p>
-              <p><strong>Namespace:</strong> {selectedIssue.namespace}</p>
-              <p><strong>Pod:</strong> {selectedIssue.pod}</p>
-              <p><strong>Root Cause:</strong> {selectedIssue.root_cause}</p>
-              <p><strong>Reason:</strong> {selectedIssue.reason}</p>
-              <p><strong>Message:</strong> {selectedIssue.message}</p>
-              {selectedIssue.evidence.length > 0 && (
-                <div style={{ marginTop: '1rem' }}>
-                  <strong>Evidence:</strong>
-                  <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                    {selectedIssue.evidence.map((e, idx) => (
-                      <li key={idx}>{e}</li>
-                    ))}
-                  </ul>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>ID</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.id}</p>
                 </div>
-              )}
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Severity</label>
+                  <p style={{ fontWeight: 500, color: selectedIssue.severity === 'critical' ? '#ef4444' : '#f59e0b' }}>
+                    {selectedIssue.severity?.toUpperCase() || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Type</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.type || 'N/A'}</p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Status</label>
+                  <p style={{ fontWeight: 500, color: selectedIssue.resolved ? '#22c55e' : '#f59e0b' }}>
+                    {selectedIssue.resolved ? 'RESOLVED' : 'ACTIVE'}
+                  </p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Namespace</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.namespace || 'N/A'}</p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Pod</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.pod || 'N/A'}</p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Node</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.node || 'N/A'}</p>
+                </div>
+                <div>
+                  <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Deployment</label>
+                  <p style={{ fontWeight: 500 }}>{selectedIssue.deployment || 'N/A'}</p>
+                </div>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Reason</label>
+                <p>{selectedIssue.reason || 'Unknown'}</p>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Message</label>
+                <p>{selectedIssue.message || 'No message available'}</p>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Root Cause</label>
+                <p>{selectedIssue.root_cause || 'Not determined'}</p>
+              </div>
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ color: '#94a3b8', fontSize: '0.875rem' }}>Timestamp</label>
+                <p>{formatTime(selectedIssue.timestamp)}</p>
+              </div>
             </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setSelectedIssue(null)}>Close</button>

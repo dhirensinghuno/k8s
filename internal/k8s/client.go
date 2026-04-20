@@ -484,13 +484,17 @@ func (c *Client) ListDeployments(ctx context.Context, namespace string) ([]model
 }
 
 func (c *Client) RollbackDeployment(ctx context.Context, namespace, name string) error {
+	log.Printf("[K8sClient] Rolling back deployment %s/%s", namespace, name)
 	patchData := fmt.Sprintf(`{"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": "%s"}}}}}`,
 		time.Now().Format(time.RFC3339))
+	log.Printf("[K8sClient] Patch data: %s", patchData)
 	_, err := c.clientset.AppsV1().Deployments(namespace).Patch(ctx, name, "application/strategic-merge-patch+json",
 		[]byte(patchData), metav1.PatchOptions{})
 	if err != nil {
+		log.Printf("[K8sClient] Rollback error: %v", err)
 		return fmt.Errorf("failed to rollback: %w", err)
 	}
+	log.Printf("[K8sClient] Rollback successful for %s/%s", namespace, name)
 	return nil
 }
 

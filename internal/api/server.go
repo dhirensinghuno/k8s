@@ -12,9 +12,23 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/k8s-sre/agent/internal/agent"
+	"github.com/k8s-sre/agent/internal/auth"
 	"github.com/k8s-sre/agent/internal/k8s"
 	"github.com/k8s-sre/agent/internal/models"
 )
+
+func (s *Server) requireRole(w http.ResponseWriter, r *http.Request, allowed ...auth.Role) bool {
+	roleStr := r.Header.Get("X-User-Role")
+	userRole := auth.Role(roleStr)
+
+	for _, allowedRole := range allowed {
+		if userRole == allowedRole {
+			return true
+		}
+	}
+	http.Error(w, "Insufficient permissions", http.StatusForbidden)
+	return false
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -25,12 +39,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	agent   *agent.Agent
-	client  *k8s.Client
-	router  *mux.Router
-	server  *http.Server
-	wsConns map[*websocket.Conn]bool
-	wsMu    sync.RWMutex
+	agent          *agent.Agent
+	client         *k8s.Client
+	router         *mux.Router
+	server         *http.Server
+	wsConns        map[*websocket.Conn]bool
+	wsMu           sync.RWMutex
+	authMiddleware *auth.AuthMiddleware
 }
 
 func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
@@ -43,19 +58,6 @@ func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
 
 	log.Println("[API] Creating router...")
 	s.router = mux.NewRouter()
-
-	s.router.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
 
 	log.Println("[API] Setting up routes...")
 	s.setupRoutes()
@@ -72,36 +74,97 @@ func NewServer(agent *agent.Agent, client *k8s.Client, port int) *Server {
 	return s
 }
 
+func (s *Server) SetAuthMiddleware(m *auth.AuthMiddleware) {
+	s.authMiddleware = m
+}
+
+func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if s.authMiddleware != nil {
+		s.authMiddleware.HandleLogin(w, r)
+	} else {
+		http.Error(w, "Authentication not configured", http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) setupRoutes() {
 	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
 	s.router.HandleFunc("/api/health", s.handleHealth).Methods("GET")
-	s.router.HandleFunc("/api/pods", s.handleListPods).Methods("GET")
-	s.router.HandleFunc("/api/pods/{namespace}/{name}", s.handleGetPod).Methods("GET")
-	s.router.HandleFunc("/api/pods/{namespace}/{name}/logs", s.handleGetPodLogs).Methods("GET")
-	s.router.HandleFunc("/api/pods/{namespace}/{name}/describe", s.handleDescribePod).Methods("GET")
-	s.router.HandleFunc("/api/nodes", s.handleListNodes).Methods("GET")
-	s.router.HandleFunc("/api/deployments", s.handleListDeployments).Methods("GET")
-	s.router.HandleFunc("/api/deployments/{namespace}/{name}/rollback", s.handleRollbackDeployment).Methods("POST")
-	s.router.HandleFunc("/api/deployments/{namespace}/{name}/restart", s.handleRestartDeployment).Methods("POST")
-	s.router.HandleFunc("/api/events", s.handleListEvents).Methods("GET")
-	s.router.HandleFunc("/api/issues", s.handleListIssues).Methods("GET")
-	s.router.HandleFunc("/api/issues/{id}", s.handleGetIssue).Methods("GET")
-	s.router.HandleFunc("/api/issues/{id}/resolve", s.handleResolveIssue).Methods("POST")
-	s.router.HandleFunc("/api/actions", s.handleListActions).Methods("GET")
-	s.router.HandleFunc("/api/actions/{id}", s.handleGetAction).Methods("GET")
-	s.router.HandleFunc("/api/audit", s.handleAuditLogs).Methods("GET")
-	s.router.HandleFunc("/api/diagnose", s.handleDiagnose).Methods("POST")
-	s.router.HandleFunc("/api/remediate", s.handleRemediate).Methods("POST")
-	s.router.HandleFunc("/api/cluster-history", s.handleClusterHistory).Methods("GET")
-	s.router.HandleFunc("/api/debug", s.handleDebug).Methods("GET")
-	s.router.HandleFunc("/api/config", s.handleGetConfig).Methods("GET")
-	s.router.HandleFunc("/api/config", s.handleUpdateConfig).Methods("PUT")
+	s.router.HandleFunc("/api/auth/login", s.handleAuthLogin).Methods("POST", "OPTIONS")
+
+	if s.authMiddleware != nil && s.authMiddleware.IsEnabled() {
+		s.router.Use(s.authMiddleware.Handler())
+
+		s.router.HandleFunc("/api/pods", s.handleListPods).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}", s.handleGetPod).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}/logs", s.handleGetPodLogs).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}/describe", s.handleDescribePod).Methods("GET")
+		s.router.HandleFunc("/api/nodes", s.handleListNodes).Methods("GET")
+		s.router.HandleFunc("/api/deployments", s.handleListDeployments).Methods("GET")
+
+		s.router.HandleFunc("/api/deployments/{namespace}/{name}/rollback", s.handleRollbackDeployment).Methods("POST")
+		s.router.HandleFunc("/api/deployments/{namespace}/{name}/restart", s.handleRestartDeployment).Methods("POST")
+
+		s.router.HandleFunc("/api/events", s.handleListEvents).Methods("GET")
+		s.router.HandleFunc("/api/issues", s.handleListIssues).Methods("GET")
+		s.router.HandleFunc("/api/issues/{id}", s.handleGetIssue).Methods("GET")
+		s.router.HandleFunc("/api/issues/{id}/resolve", s.handleResolveIssue).Methods("POST")
+		s.router.HandleFunc("/api/actions", s.handleListActions).Methods("GET")
+		s.router.HandleFunc("/api/actions/{id}", s.handleGetAction).Methods("GET")
+		s.router.HandleFunc("/api/audit", s.handleAuditLogs).Methods("GET")
+		s.router.HandleFunc("/api/cluster-history", s.handleClusterHistory).Methods("GET")
+		s.router.HandleFunc("/api/config", s.handleGetConfig).Methods("GET")
+
+		s.router.HandleFunc("/api/diagnose", s.handleDiagnose).Methods("POST")
+		s.router.HandleFunc("/api/remediate", s.handleRemediate).Methods("POST")
+		s.router.HandleFunc("/api/debug", s.handleDebug).Methods("GET")
+		s.router.HandleFunc("/api/config", s.handleUpdateConfig).Methods("PUT")
+	} else {
+		s.router.HandleFunc("/api/pods", s.handleListPods).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}", s.handleGetPod).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}/logs", s.handleGetPodLogs).Methods("GET")
+		s.router.HandleFunc("/api/pods/{namespace}/{name}/describe", s.handleDescribePod).Methods("GET")
+		s.router.HandleFunc("/api/nodes", s.handleListNodes).Methods("GET")
+		s.router.HandleFunc("/api/deployments", s.handleListDeployments).Methods("GET")
+		s.router.HandleFunc("/api/deployments/{namespace}/{name}/rollback", s.handleRollbackDeployment).Methods("POST")
+		s.router.HandleFunc("/api/deployments/{namespace}/{name}/restart", s.handleRestartDeployment).Methods("POST")
+		s.router.HandleFunc("/api/events", s.handleListEvents).Methods("GET")
+		s.router.HandleFunc("/api/issues", s.handleListIssues).Methods("GET")
+		s.router.HandleFunc("/api/issues/{id}", s.handleGetIssue).Methods("GET")
+		s.router.HandleFunc("/api/issues/{id}/resolve", s.handleResolveIssue).Methods("POST")
+		s.router.HandleFunc("/api/actions", s.handleListActions).Methods("GET")
+		s.router.HandleFunc("/api/actions/{id}", s.handleGetAction).Methods("GET")
+		s.router.HandleFunc("/api/audit", s.handleAuditLogs).Methods("GET")
+		s.router.HandleFunc("/api/diagnose", s.handleDiagnose).Methods("POST")
+		s.router.HandleFunc("/api/remediate", s.handleRemediate).Methods("POST")
+		s.router.HandleFunc("/api/cluster-history", s.handleClusterHistory).Methods("GET")
+		s.router.HandleFunc("/api/debug", s.handleDebug).Methods("GET")
+		s.router.HandleFunc("/api/config", s.handleGetConfig).Methods("GET")
+		s.router.HandleFunc("/api/config", s.handleUpdateConfig).Methods("PUT")
+	}
 
 	s.router.HandleFunc("/ws", s.handleWebSocket)
 }
 
 func (s *Server) Start() error {
 	log.Println("[API] Starting server...")
+
+	log.Println("[API] Adding CORS middleware...")
+	s.router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	log.Println("[API] Setting up final routes...")
+	s.setupRoutes()
+
 	go s.broadcastLoop()
 	log.Println("[API] Broadcast loop started")
 	log.Printf("[API] Server listening on %s", s.server.Addr)
@@ -234,9 +297,15 @@ func (s *Server) handleListDeployments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(w, r, auth.RoleAdmin, auth.RoleEditor) {
+		return
+	}
+	log.Println("[API] Handling rollback request...")
 	vars := mux.Vars(r)
 	namespace := vars["namespace"]
 	name := vars["name"]
+
+	log.Printf("[API] Rollback for deployment: %s/%s", namespace, name)
 
 	var req struct {
 		Reason string `json:"reason"`
@@ -245,13 +314,17 @@ func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request
 		req.Reason = "Manual rollback requested"
 	}
 
+	log.Printf("[API] Reason: %s", req.Reason)
+
 	ctx := context.Background()
 	err := s.client.RollbackDeployment(ctx, namespace, name)
 	if err != nil {
+		log.Printf("[API] Rollback error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Println("[API] Rollback successful")
 	s.writeJSON(w, map[string]string{
 		"status":  "success",
 		"message": fmt.Sprintf("Rollback initiated for deployment %s/%s", namespace, name),
@@ -260,17 +333,25 @@ func (s *Server) handleRollbackDeployment(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleRestartDeployment(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(w, r, auth.RoleAdmin, auth.RoleEditor) {
+		return
+	}
+	log.Println("[API] Handling restart request...")
 	vars := mux.Vars(r)
 	namespace := vars["namespace"]
 	name := vars["name"]
 
+	log.Printf("[API] Restart for deployment: %s/%s", namespace, name)
+
 	ctx := context.Background()
 	err := s.client.RestartDeployment(ctx, namespace, name)
 	if err != nil {
+		log.Printf("[API] Restart error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Println("[API] Restart successful")
 	s.writeJSON(w, map[string]string{
 		"status":  "success",
 		"message": fmt.Sprintf("Restart initiated for deployment %s/%s", namespace, name),
@@ -304,6 +385,9 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResolveIssue(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(w, r, auth.RoleAdmin, auth.RoleEditor) {
+		return
+	}
 	vars := mux.Vars(r)
 	id := vars["id"]
 
@@ -371,6 +455,9 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRemediate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(w, r, auth.RoleAdmin, auth.RoleEditor) {
+		return
+	}
 	var req struct {
 		IssueID string `json:"issue_id"`
 		Force   bool   `json:"force"`

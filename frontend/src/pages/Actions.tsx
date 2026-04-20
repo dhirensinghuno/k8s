@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { RotateCcw, Wrench, AlertCircle } from 'lucide-react';
-const API_BASE = 'http://localhost:8888';
+const API_BASE = '';
 
 interface Action {
   id: string;

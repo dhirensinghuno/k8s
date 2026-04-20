@@ -3,8 +3,10 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/k8s-sre/agent/internal/auth"
 	"github.com/k8s-sre/agent/internal/models"
 	_ "github.com/lib/pq"
 )
@@ -410,4 +412,124 @@ func (s *Store) GetClusterHistory(hours int) ([]models.ClusterHealth, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) InitAuthTables() error {
+	schema := `
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);`
+	_, err := s.db.Exec(schema)
+	if err != nil {
+		return fmt.Errorf("failed to create users table: %w", err)
+	}
+
+	log.Println("[Store] Users table initialized")
+	return nil
+}
+
+func (s *Store) GetUserByUsername(username string) (*auth.User, error) {
+	var user auth.User
+	err := s.db.QueryRow(
+		"SELECT id, username, password_hash, role, created_at, updated_at FROM users WHERE username = $1",
+		username,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("user not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	return &user, nil
+}
+
+func (s *Store) CreateUser(user *auth.User) error {
+	if user.PasswordHash == "" {
+		return fmt.Errorf("password hash is required")
+	}
+
+	if user.Role == "" {
+		user.Role = auth.RoleViewer
+	}
+
+	_, err := s.db.Exec(
+		"INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+		user.Username, user.PasswordHash, user.Role, time.Now(), time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create user: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) GetAllUsers() ([]auth.User, error) {
+	rows, err := s.db.Query("SELECT id, username, role, created_at, updated_at FROM users ORDER BY username")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []auth.User
+	for rows.Next() {
+		var user auth.User
+		if err := rows.Scan(&user.ID, &user.Username, &user.Role, &user.CreatedAt, &user.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
+}
+
+func (s *Store) DeleteUser(id int) error {
+	_, err := s.db.Exec("DELETE FROM users WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateUserRole(id int, role auth.Role) error {
+	_, err := s.db.Exec("UPDATE users SET role = $1, updated_at = $2 WHERE id = $3", role, time.Now(), id)
+	if err != nil {
+		return fmt.Errorf("failed to update user role: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) CreateDefaultAdmin(adminPassword string) error {
+	var exists bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE username = 'admin')").Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("failed to check if admin exists: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	hashedPassword, err := auth.HashPassword(adminPassword)
+	if err != nil {
+		return fmt.Errorf("failed to hash admin password: %w", err)
+	}
+
+	admin := &auth.User{
+		Username:     "admin",
+		PasswordHash: hashedPassword,
+		Role:         auth.RoleAdmin,
+	}
+
+	if err := s.CreateUser(admin); err != nil {
+		return fmt.Errorf("failed to create admin user: %w", err)
+	}
+
+	log.Printf("[Store] Default admin user created")
+	return nil
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Server, Container, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
-const API_BASE = 'http://localhost:8888';
+const API_BASE = '';
 
 interface Health {
   overall_status: string;
@@ -18,6 +18,8 @@ export default function Dashboard() {
   const [health, setHealth] = useState<Health | null>(null);
   const [recentEvents, setRecentEvents] = useState<any[]>([]);
   const [recentActions, setRecentActions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -27,17 +29,37 @@ export default function Dashboard() {
 
   const fetchData = async () => {
     try {
-      const [healthRes, eventsRes, actionsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/health`),
-        fetch(`${API_BASE}/api/events`),
-        fetch(`${API_BASE}/api/actions`)
-      ]);
-      const [h, e, a] = await Promise.all([healthRes.json(), eventsRes.json(), actionsRes.json()]);
+      setLoading(true);
+      setError(null);
+      
+      const healthRes = await fetch(`${API_BASE}/api/health`);
+      const h = await healthRes.json();
+      
+      let e: any[] = [];
+      let a: any[] = [];
+      
+      try {
+        const eventsRes = await fetch(`${API_BASE}/api/events`);
+        e = await eventsRes.json();
+      } catch (eveErr) {
+        console.warn('Failed to fetch events:', eveErr);
+      }
+      
+      try {
+        const actionsRes = await fetch(`${API_BASE}/api/actions`);
+        a = await actionsRes.json();
+      } catch (actErr) {
+        console.warn('Failed to fetch actions:', actErr);
+      }
+      
       setHealth(h);
-      setRecentEvents(e.slice(0, 5));
-      setRecentActions(a.slice(0, 5));
+      setRecentEvents(Array.isArray(e) ? e.slice(0, 5) : []);
+      setRecentActions(Array.isArray(a) ? a.slice(0, 5) : []);
+      setLoading(false);
     } catch (err) {
       console.error('Failed to fetch data:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+      setLoading(false);
     }
   };
 
@@ -54,6 +76,20 @@ export default function Dashboard() {
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleTimeString();
   };
+
+  if (loading && !health) {
+    return <div style={{ padding: '2rem' }}><h2>Loading cluster data...</h2></div>;
+  }
+
+  if (error && !health) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <h2>Error loading data</h2>
+        <p style={{ color: 'red' }}>{error}</p>
+        <button onClick={fetchData}>Retry</button>
+      </div>
+    );
+  }
 
   return (
     <div>
